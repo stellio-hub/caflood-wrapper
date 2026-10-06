@@ -1,0 +1,10 @@
+# Secrets: only the template is versioned
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/

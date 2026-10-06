@@ -1,0 +1,230 @@
+#!/usr/bin/env python3
+"""
+CAFLOOD pipeline, step 2 - poll every run on the CAFLOOD VM.
+
+One SSH call examines each run folder under CAFLOOD_RUNS_DIR that has not
+been marked as reported yet, without asking the broker which
+ServiceExecutions exist, and prints one JSON array on stdout, one object
+per run, telling NiFi what to do next:
+
+  [{"folder": "urn:ngsi-ld:ServiceExecution:5be8...",
+    "serviceExecutionId": "urn:ngsi-ld:ServiceExecution:5be8...",
+    "action": "update",
+    "update": {"executionStatus": "executing", "progress": 0.4684},
+    "detail": {"state": "running", "phase": "simulation", ...}}, ...]
+
+  action    run state                   NiFi does
+  update    pending / running           PATCH the ServiceExecution with "update"
+  finalize  failed, or completed with   PATCH with "update", then --mark-reported
+            a saved publish result
+  publish   completed, not published    run caflood_publish.py <folder>; its
+                                        output is a "finalize" object (success,
+                                        or failure once publishing has kept
+                                        failing for too long)
+  wait      completed, being published  nothing (a publisher holds the claim)
+  ignore    unreadable folder           nothing ("detail" says why)
+
+Publishing bookkeeping (see caflood_publish.py): a fresh "publishing" claim
+(< CLAIM_TIMEOUT_S) means another publish is in progress -> "wait"; an older
+one is a crashed publisher -> "publish" again. A saved publish_result.json is
+re-sent as "finalize" without publishing again (e.g. when the PATCH failed).
+
+"update" is the broker body: executionStatus (executing / failure /
+success), progress (0..1), output (only when there is something to say -
+warnings, or error + exitCode on failure); never a null value. "detail" is
+caflood_status.determine_status() for logs / provenance - not for the
+broker.
+
+Lifecycle of a run folder:
+  - unreported (no "reported" file): listed on every poll - "pending" /
+    "running" ones so their progress can be pushed to the ServiceExecution,
+    "completed" / "failed" ones until they have been handled;
+  - once its final status (and, for completed runs, its results - see
+    caflood_publish.py, step 3) have been pushed, NiFi marks it:
+        python caflood_poll.py --mark-reported <folder>
+    which creates <folder>/reported - it is never listed again. Mark only
+    after the update succeeded: an unmarked run is simply retried.
+Folders without a config.csv are not CAFLOOD runs and are skipped.
+
+Usage (NiFi: ExecuteProcess on a timer):
+  python caflood_poll.py                     -> JSON array on stdout
+  python caflood_poll.py --mark-reported F   -> marks run folder F as reported
+  python caflood_poll.py --local-dir DIR     -> same scan on a local folder (testing)
+
+Environment: CAFLOOD_SSH_* / CAFLOOD_RUNS_DIR, see caflood_common.py.
+Exit codes: 0 = done (the array may be empty), 1 = SSH failed, 2 = bad usage.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import shlex
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any
+
+from caflood_common import check_folder_name, run_ssh, ssh_settings
+from caflood_status import (
+    CLAIM_FILE,
+    CLAIM_TIMEOUT_S,
+    LOG_TAIL_BYTES,
+    RESULT_FILE,
+    StatusInputError,
+    compact,
+    determine_status,
+    executing_update,
+    failure_update,
+    parse_bundle,
+    read_dir,
+    service_execution_id,
+)
+
+REPORTED_MARKER = "reported"
+
+# Remote side of the scan: one "@@run <folder>" block per unreported run,
+# each holding the sections caflood_status.parse_bundle() expects.
+_SCAN_SCRIPT = """\
+cd {runs_dir} || exit 3
+for d in */; do
+  d=${{d%/}}
+  [ -f "$d/config.csv" ] || continue
+  [ -f "$d/{marker}" ] && continue
+  echo "@@run $d"
+  echo @@exit_code
+  cat "$d/exit_code" 2>/dev/null
+  echo @@alive
+  if [ -f "$d/pid" ]; then
+    kill -0 "$(cat "$d/pid")" 2>/dev/null && echo yes || echo no
+  else
+    echo nopid
+  fi
+  echo @@config
+  cat "$d/config.csv"
+  echo
+  echo @@code
+  grep -a '^CODE:' "$d/output.log" 2>/dev/null
+  echo @@claim_age
+  if [ -f "$d/{claim}" ]; then echo $(( $(date +%s) - $(stat -c %Y "$d/{claim}") )); fi
+  echo @@publish_result
+  cat "$d/{result}" 2>/dev/null
+  echo
+  echo @@log
+  tail -c {tail_bytes} "$d/output.log" 2>/dev/null
+  echo
+done
+"""
+
+
+def split_runs(scan_output: str) -> dict[str, str]:
+    runs: dict[str, list[str]] = {}
+    current: str | None = None
+    for line in scan_output.splitlines():
+        if line.startswith("@@run "):
+            current = line[len("@@run "):].strip()
+            runs[current] = []
+        elif current is not None:
+            runs[current].append(line)
+    return {folder: "\n".join(lines) for folder, lines in runs.items()}
+
+
+def poll_entry(folder: str, parts: dict[str, str]) -> dict[str, Any]:
+    """One run's status -> what NiFi should do next (see module docstring)."""
+    status = determine_status(parts)
+    entry: dict[str, Any] = {
+        "folder": folder,
+        "serviceExecutionId": service_execution_id(folder, parts["config"]),
+    }
+    state = status["state"]
+    if state in ("pending", "running"):
+        # pending = unzipped, launch imminent: already "executing" for the broker.
+        progress = status["progress"] if state == "running" else 0.0
+        entry.update(action="update", update=executing_update(progress, status["warnings"]))
+    elif state == "completed":
+        saved = _saved_result(parts.get("publish_result", ""))
+        claim_age = parts.get("claim_age", "").strip()
+        if saved:
+            entry.update(action="finalize", update=saved)
+        elif claim_age.isdigit() and int(claim_age) < CLAIM_TIMEOUT_S:
+            entry["action"] = "wait"
+        else:
+            entry["action"] = "publish"
+    else:
+        entry.update(action="finalize", update=failure_update(
+            status["progress"], status["error"] or "CAFLOOD run failed",
+            exit_code=status["exitCode"], warnings=status["warnings"],
+        ))
+    entry["detail"] = compact(status)
+    return entry
+
+
+def _saved_result(text: str) -> dict[str, Any] | None:
+    """publish_result.json -> the update to re-send; None if absent / unreadable
+    (an unreadable one just means publishing again)."""
+    try:
+        update = json.loads(text) if text.strip() else None
+    except ValueError:
+        return None
+    return update if isinstance(update, dict) and update.get("executionStatus") else None
+
+
+def scan_remote(settings: dict[str, str]) -> list[dict[str, Any]]:
+    script = _SCAN_SCRIPT.format(
+        runs_dir=shlex.quote(settings["runs_dir"]),
+        marker=REPORTED_MARKER,
+        claim=CLAIM_FILE,
+        result=RESULT_FILE,
+        tail_bytes=LOG_TAIL_BYTES,
+    )
+    entries = []
+    for folder, bundle in split_runs(run_ssh(settings, script)).items():
+        try:
+            entries.append(poll_entry(folder, parse_bundle(bundle)))
+        except StatusInputError as exc:
+            entries.append({"folder": folder, "action": "ignore", "detail": {"error": str(exc)}})
+    return entries
+
+
+def scan_local(runs_dir: Path) -> list[dict[str, Any]]:
+    entries = []
+    for run_dir in sorted(p for p in runs_dir.iterdir() if p.is_dir()):
+        if not (run_dir / "config.csv").is_file() or (run_dir / REPORTED_MARKER).exists():
+            continue
+        entries.append(poll_entry(run_dir.name, read_dir(run_dir)))
+    return entries
+
+
+def mark_reported(settings: dict[str, str], folder: str, local_dir: Path | None) -> None:
+    check_folder_name(folder)
+    if local_dir is not None:
+        (local_dir / folder / REPORTED_MARKER).touch()
+        return
+    path = f"{settings['runs_dir']}/{folder}"
+    run_ssh(settings, f"test -d {shlex.quote(path)} && touch {shlex.quote(path + '/' + REPORTED_MARKER)}")
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--mark-reported", metavar="FOLDER", help="Mark this run folder as reported and exit")
+    parser.add_argument("--local-dir", type=Path, help="Scan a local folder of runs instead of the VM (testing)")
+    args = parser.parse_args(argv)
+
+    settings = ssh_settings()
+    try:
+        if args.mark_reported:
+            mark_reported(settings, args.mark_reported, args.local_dir)
+            return 0
+        entries = scan_local(args.local_dir) if args.local_dir else scan_remote(settings)
+    except ValueError as exc:
+        print(f"caflood_poll: {exc}", file=sys.stderr)
+        return 2
+    except (RuntimeError, subprocess.TimeoutExpired) as exc:
+        print(f"caflood_poll: SSH to the CAFLOOD VM failed: {exc}", file=sys.stderr)
+        return 1
+    print(json.dumps(entries))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
