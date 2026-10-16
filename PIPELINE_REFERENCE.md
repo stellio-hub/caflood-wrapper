@@ -80,7 +80,7 @@ documented in `caflood/DOCUMENTATION.md`.
   },
   "fileSize": { "type": "Property", "value": 52.29, "unitCode": "4L" },
   "resolution": { "type": "Property", "value": 5, "unitCode": "MTR" },
-  "digitalElevationModel": {
+  "digitalElevationModelLinkUrl": {
     "type": "Property",
     "value": "https://saas-object-store.stellio.io/urbaquantum-caflood-inputs-dem/9ac32dde-cb98-4c11-8c18-c7ec626a58fc"
   },
@@ -90,7 +90,7 @@ documented in `caflood/DOCUMENTATION.md`.
 
 The pipeline reads only two attributes:
 
-- `digitalElevationModel`: an ESRI ASCII Grid (`.asc`), given as the
+- `digitalElevationModelLinkUrl`: an ESRI ASCII Grid (`.asc`), given as the
   object-store URL returned by an upload (see [§7](#7-file-storage)). A local
   path relative to `CAFLOOD_DATA_DIR` also works, for testing.
 - `coordinateReferenceSystem`: the CRS of that DEM. An `.asc` file can't
@@ -336,7 +336,7 @@ configuration.
 | Selection `location`                      | WGS84 → StudyArea CRS (pyproj). A **Point** becomes a one-cell `Zone`: centre of the DEM cell, width and height = cell size. CAFLOOD resolves a zone to the cell containing its top-left corner plus `ceil(w/cellsize) × ceil(h/cellsize)` cells. A **Polygon** becomes an `Area` (bounding box). A point outside the DEM is an error. A water-level point on a NODATA cell is an error. |
 | `requestedOutputs.rasterSpatialOutputs`   | One raster CSV per variable (`waterDepth` → `WD`, `waterVelocity` → `VEL`), peak + periodic snapshots every `outputRecoringPeriod` s. Without `requestedOutputs`: peak WD + VEL only.                                                                                                                                                                                                    |
 | `requestedOutputs.pointMonitoringOutputs` | Supported but unused so far: one time-plot CSV per variable at the `controlPoints`' (reprojected) locations.                                                                                                                                                                                                                                                                             |
-| `tuningConfig`                            | Optional (`alpha`, `maxDt`, `minDt`, `maxIteration`, `roughnessGlobal`, `boundaryElevation`). Missing keys use `DEFAULT_TUNING`, with a warning.                                                                                                                                                                                                                                         |
+| `tuningConfig`                            | Optional (`alpha`, `maxDt`, `minDt`, `maxIteration`, `roughnessGlobal`). Missing keys use `DEFAULT_TUNING`, with a warning. `boundaryElevation` is ignored (with a warning): Boundary Ele is always -10000 (open boundary, see `BOUNDARY_ELE`).                                                                                                                                                                                                                                         |
 | `initalWaterDepth`                        | Ignored (CAFLOOD cold start).                                                                                                                                                                                                                                                                                                                                                            |
 
 Fixed settings:
@@ -413,7 +413,7 @@ Update DT (seconds),60.0
 Alpha (Fraction DT 0.0-1.0),0.7
 Max Iterations,2000000
 Roughness Global,0.03
-Boundary Ele (Hi/Closed-Lo/Open),1000.0
+Boundary Ele (Hi/Closed-Lo/Open),-10000.0
 Elevation ASCII,dem.asc
 Rain Event CSV,rain_2.csv
 Inflow Event CSV,inflow_0.csv
@@ -870,7 +870,7 @@ They don't cover the real SSH, Stellio and S3 calls. For those, use the
   stellio-dev (one set of `STELLIO_*` credentials). Production will move to
   the target platform: broker, tenant, `FILE_STORAGE_URL` and its realm.
 - **No `tuningConfig` in current payloads:** every run uses `DEFAULT_TUNING`
-  (roughness 0.03, closed boundary at 1000 m).
+  (roughness 0.03). Boundary Ele is always -10000 (open boundary).
 - **Final PATCH retries have no cap:** if a `finalize` can never be PATCHed
   (e.g. the ServiceExecution was deleted), it's re-sent at every poll.
 - **Number of snapshots** = `Time End / outputRecoringPeriod` per variable

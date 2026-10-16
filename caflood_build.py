@@ -13,7 +13,7 @@ caflood_publish.py.
      "studyAreaId" - or the full envelope ("id", "entityId", "input").
      Examples in PIPELINE_REFERENCE.md section 2.
      No serviceName check: this endpoint only receives CAFLOOD executions.
-  2. Fetches the StudyArea: its digitalElevationModel (object-store URL,
+  2. Fetches the StudyArea: its digitalElevationModelLinkUrl (object-store URL,
      fetched through the file-storage endpoint - or a local path for
      testing) and coordinateReferenceSystem.
   3. Turns the selected forcings into CAFLOOD events (caflood_inputs.py):
@@ -101,8 +101,13 @@ DEFAULT_TUNING = dict(
     min_dt=0.1,
     max_iter=2_000_000,
     roughness_global=0.03,
-    boundary_ele=1000.0,
 )
+
+# Boundary Ele is always very negative to get an open boundary: CAFLOOD
+# never drains the boundary ring, so its cells must be deep enough to absorb
+# all outflow (0 fills up and water stacks at the edge). Must not equal the
+# DEM nodata value. Any tuningConfig.boundaryElevation is ignored.
+BOUNDARY_ELE = -10000.0
 
 # Output period when requestedOutputs doesn't give one (outputRecoringPeriod).
 DEFAULT_OUTPUT_PERIOD_S = 300.0
@@ -116,7 +121,6 @@ _TUNING_CONFIG_KEYS = {
     "minDt": "min_dt",
     "maxIteration": "max_iter",
     "roughnessGlobal": "roughness_global",
-    "boundaryElevation": "boundary_ele",
 }
 
 
@@ -148,7 +152,7 @@ def build_caflood_job(
     # --- StudyArea: DEM + CRS ------------------------------------------
     study_area = stellio.get_entity(payload.entity_id)
     dem_source = read_attribute(
-        study_area, "digitalElevationModel", entity_id=payload.entity_id
+        study_area, "digitalElevationModelLinkUrl", entity_id=payload.entity_id
     )
     crs = read_attribute(
         study_area, "coordinateReferenceSystem", entity_id=payload.entity_id
@@ -263,10 +267,12 @@ def build_caflood_job(
                 missing.append(src_key)
         if missing:
             warnings.append(f"tuningConfig missing {missing}: using DEFAULT_TUNING for those keys")
+        if "boundaryElevation" in tuning_config:
+            warnings.append(f"tuningConfig.boundaryElevation ignored: Boundary Ele is always {BOUNDARY_ELE}")
     else:
         warnings.append(
             "No tuningConfig in input: using DEFAULT_TUNING placeholders for Alpha/"
-            "Max-Min DT/Roughness/Boundary Ele"
+            "Max-Min DT/Roughness"
         )
 
     # --- setup csv --------------------------------------------------------
@@ -281,7 +287,7 @@ def build_caflood_job(
         sim_name=payload.execution_id,
         time_end_s=timeframe.duration_s,
         roughness_global=tuning["roughness_global"],
-        boundary_ele=tuning["boundary_ele"],
+        boundary_ele=BOUNDARY_ELE,
         alpha=tuning["alpha"],
         max_dt=tuning["max_dt"],
         min_dt=tuning["min_dt"],

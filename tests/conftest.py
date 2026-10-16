@@ -132,7 +132,7 @@ def study_area(dem_source: str) -> dict:
     return {
         "id": STUDY_AREA_ID,
         "type": "StudyArea",
-        "digitalElevationModel": {"type": "Property", "value": dem_source},
+        "digitalElevationModelLinkUrl": {"type": "Property", "value": dem_source},
         "coordinateReferenceSystem": {"type": "Property", "value": DEM_CRS},
     }
 
