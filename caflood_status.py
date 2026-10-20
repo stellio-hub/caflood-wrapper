@@ -36,7 +36,7 @@ writes every snapshot in time order ("Write Raster Grid: <path>_<t>"), so
 its progress = last t / Time End. Overall progress weights them
 SIMULATION_WEIGHT / 1 - SIMULATION_WEIGHT. "phase" is preprocessing /
 simulation / postprocessing / done; "code" is CAFLOOD's quality flag
-(0 / 2 / 4, see caflood/DOCUMENTATION.md 10.2).
+(0 / 2 / 4, see DOC_CAFLOOD.md 10.2).
 
 Inputs (parse_bundle / read_dir): the "exit_code", "alive" (yes / no /
 nopid), "config", "code", "claim_age" (seconds since the publishing claim,

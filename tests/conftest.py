@@ -3,7 +3,7 @@ Shared fixtures for the offline test suite: no network, no CAFLOOD VM, no
 example files - everything (DEM, CAFLOOD log, run folders, entities) is
 generated here, and Stellio / file storage are replaced by in-memory fakes.
 
-Run from service_execution_test/:   python -m pytest tests
+Run from the repo root:   python -m pytest tests
 """
 
 from __future__ import annotations

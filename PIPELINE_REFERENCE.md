@@ -50,7 +50,7 @@ flowchart TD
 | `check_file_storage.py`, `check_inputs.py` | a developer                  | manual checks: S3 round trip, entities readable                       |
 
 The CAFLOOD engine itself (setup file format, outputs, error messages) is
-documented in `caflood/DOCUMENTATION.md`.
+documented in `DOC_CAFLOOD.md`.
 
 ---
 
@@ -590,7 +590,7 @@ Grid: …_<t>` line, divided by `Time End`. CAFLOOD writes the snapshots in
 
 `phase` is one of `preprocessing`, `simulation`, `postprocessing`, `done`.
 `code` is CAFLOOD's quality flag: 0 = flood contained, 2 = touches DEM
-NODATA, 4 = reaches the domain edge (`caflood/DOCUMENTATION.md` §10.2). It's
+NODATA, 4 = reaches the domain edge (`DOC_CAFLOOD.md` §10.2). It's
 read with a `grep` over the whole log, because post-processing output can
 push it out of the tail.
 
@@ -773,13 +773,19 @@ Exit codes: 0 = a `finalize` object was printed (success, or failure after
 
 ## 7. File storage
 
-S3 buckets behind **one NiFi HTTP endpoint**, routed on the HTTP method. The
-pipeline uses the dev one (`FILE_STORAGE_URL`):
+S3 buckets behind **one NiFi HTTP endpoint**, routed on the HTTP method.
+Each deployment uses the endpoint that trusts its broker's realm
+(`FILE_STORAGE_URL`, authenticated with the `STELLIO_*` credentials):
 
-| Endpoint                                             | Trusted Keycloak realm                                          |
-| ---------------------------------------------------- | --------------------------------------------------------------- |
-| `https://dataflow.stellio.io/dev/storage` (used)     | `stellio-dev`, the same credentials as the broker (`STELLIO_*`) |
-| `https://saas-import.stellio.io/urbaquantum/storage` | `urbaquantum`                                                   |
+| Endpoint                                             | Trusted Keycloak realm | Deployment  |
+| ---------------------------------------------------- | ---------------------- | ----------- |
+| `https://dataflow.stellio.io/dev/storage`            | `stellio-dev`          | dev         |
+| `https://saas-import.stellio.io/urbaquantum/storage` | `urbaquantum`          | UrbaQuantum |
+
+The S3 processors of both flows need **Use Path Style Access = true**:
+`<bucket>.saas-object-store.stellio.io` doesn't resolve. After importing a
+new flow version, re-enter the S3 secret key (NiFi doesn't carry sensitive
+values over).
 
 | Method                              | Request                    | Response                                                             |
 | ----------------------------------- | -------------------------- | -------------------------------------------------------------------- |
@@ -828,7 +834,9 @@ arguments. The full list is in `caflood_common.py`'s docstring and
 | Build        | `CAFLOOD_WORK_DIR`, `CAFLOOD_DATA_DIR`                                                                                                                                                         |
 | CAFLOOD VM   | `CAFLOOD_SSH_TARGET`, `CAFLOOD_SSH_PORT`, `CAFLOOD_SSH_KEY`, `CAFLOOD_SSH_KNOWN_HOSTS`, `CAFLOOD_RUNS_DIR`, `CAFLOOD_LOG_RETENTION_DAYS` (default 7), `CAFLOOD_SSH_MULTIPLEX` (default 1), `CAFLOOD_SSH_CONTROL_DIR` (default: temp dir) |
 
-Deployment on the NiFi machine (`/opt/scripts/urbaquantum/caflood/`):
+Deployment on the NiFi machine: one clone of this repo per deployment (e.g.
+`/opt/scripts/urbaquantum/caflood-wrapper/`), each with its own `.env`.
+Updating is a `git pull` there; NiFi picks it up at the next call.
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt   # requests, pyproj, rasterio (ships GDAL)
