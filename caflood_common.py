@@ -34,6 +34,8 @@ scripts, else the current directory; real environment variables win.
     CAFLOOD_SSH_KEY              default /opt/certs/id_ed25519_caflood_vm
     CAFLOOD_SSH_KNOWN_HOSTS      default /opt/certs/known_hosts
     CAFLOOD_RUNS_DIR             default /home/stellio/caflood-service-execution
+    CAFLOOD_LOG_RETENTION_DAYS   default 7: how long a reported run's
+                                 output.log is kept (caflood_poll.py)
     CAFLOOD_SSH_MULTIPLEX        default 1: reuse one SSH connection (OpenSSH
                                  ControlMaster) for 60 s - set 0 to disable
     CAFLOOD_SSH_CONTROL_DIR      where its socket lives, default the temp dir
@@ -331,6 +333,7 @@ def ssh_settings() -> dict[str, str]:
         "key": env("CAFLOOD_SSH_KEY", "/opt/certs/id_ed25519_caflood_vm"),
         "known_hosts": env("CAFLOOD_SSH_KNOWN_HOSTS", "/opt/certs/known_hosts"),
         "runs_dir": env("CAFLOOD_RUNS_DIR", "/home/stellio/caflood-service-execution"),
+        "log_retention_days": env("CAFLOOD_LOG_RETENTION_DAYS", "7"),
         "multiplex": env("CAFLOOD_SSH_MULTIPLEX", "1"),
         "control_dir": env("CAFLOOD_SSH_CONTROL_DIR", tempfile.gettempdir()),
     }

@@ -611,8 +611,33 @@ plus the last log lines.
 ### 5.3 Run folder lifecycle and cleanup
 
 `python caflood_poll.py --mark-reported <folder>` creates `<folder>/reported`.
-Folder names with characters outside `[A-Za-z0-9_.:-]` are refused. Old
-folders from before this mechanism can be marked by hand on the VM:
+Folder names with characters outside `[A-Za-z0-9_.:-]` are refused.
+
+Reported folders are cleaned up by the following scans, with no extra NiFi
+step:
+
+| When                                                   | What is deleted                                                                     |
+| ------------------------------------------------------ | ----------------------------------------------------------------------------------- |
+| next scan after `--mark-reported`                      | everything except `output.log` and `reported` (zip, inputs, `output_dir`, results…) |
+| `reported` older than `CAFLOOD_LOG_RETENTION_DAYS` (7) | the whole folder                                                                    |
+
+The inputs, outputs and results can all be regenerated with the wrapper,
+and the results are already in S3 and Stellio by then. Only `output.log` is
+kept, to debug a run after it has been reported. Folders with neither
+`config.csv` nor `reported` are never touched. A missing `CAFLOOD_RUNS_DIR`
+is created by the scan, and an empty one gives `[]`.
+
+The scan script is fed to `sh -s` on stdin rather than run by the VM user's
+login shell (zsh), where a `*/` that matches nothing is a fatal error
+("no matches found", #8246 (status polling zsh glob error)).
+
+**One `CAFLOOD_RUNS_DIR` per tenant/deployment:** a poller handles (and
+cleans up) every run in its folder, so two deployments sharing one folder
+would PATCH each other's ServiceExecutions on the wrong broker. Use the
+same folder in the NiFi upload/unzip/launch commands ([§4](#4-launch-on-the-caflood-vm)).
+
+Old folders from before this mechanism can be marked by hand on the VM. They
+are then stripped at the next poll:
 
 ```bash
 cd /home/stellio/caflood-service-execution && for d in */; do touch "$d/reported"; done
@@ -801,7 +826,7 @@ arguments. The full list is in `caflood_common.py`'s docstring and
 | Stellio      | `STELLIO_BASE_URL`, `STELLIO_TOKEN_URL`, `STELLIO_CLIENT_ID`, `STELLIO_CLIENT_SECRET`, `STELLIO_CONTEXT_URL`, `STELLIO_TENANT`                                                                 |
 | File storage | `FILE_STORAGE_URL` (default `https://dataflow.stellio.io/dev/storage`, authenticated with the `STELLIO_*` client), `FILE_STORAGE_OUTPUT_BUCKET`                                                |
 | Build        | `CAFLOOD_WORK_DIR`, `CAFLOOD_DATA_DIR`                                                                                                                                                         |
-| CAFLOOD VM   | `CAFLOOD_SSH_TARGET`, `CAFLOOD_SSH_PORT`, `CAFLOOD_SSH_KEY`, `CAFLOOD_SSH_KNOWN_HOSTS`, `CAFLOOD_RUNS_DIR`, `CAFLOOD_SSH_MULTIPLEX` (default 1), `CAFLOOD_SSH_CONTROL_DIR` (default: temp dir) |
+| CAFLOOD VM   | `CAFLOOD_SSH_TARGET`, `CAFLOOD_SSH_PORT`, `CAFLOOD_SSH_KEY`, `CAFLOOD_SSH_KNOWN_HOSTS`, `CAFLOOD_RUNS_DIR`, `CAFLOOD_LOG_RETENTION_DAYS` (default 7), `CAFLOOD_SSH_MULTIPLEX` (default 1), `CAFLOOD_SSH_CONTROL_DIR` (default: temp dir) |
 
 Deployment on the NiFi machine (`/opt/scripts/urbaquantum/caflood/`):
 

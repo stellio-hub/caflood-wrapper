@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import subprocess
 import sys
+import time
 
 import pytest
 
-from caflood_poll import REPORTED_MARKER, mark_reported, poll_entry, scan_local, split_runs
+from caflood_poll import REPORTED_MARKER, mark_reported, poll_entry, scan_local, scan_remote, split_runs
 from caflood_status import (
     CLAIM_FILE,
     CLAIM_TIMEOUT_S,
@@ -143,6 +146,54 @@ def test_scan_local_lists_unreported_runs_only(tmp_path):
 
     mark_reported({}, "done", tmp_path)
     assert [e["folder"] for e in scan_local(tmp_path)] == ["waiting"]
+
+
+# --- remote scan script, run by a local shell standing in for the VM -------------
+
+def _vm(monkeypatch, tmp_path, login_shell="sh", **settings):
+    """Run scan_remote() locally: `login_shell -c <remote command>`, like sshd."""
+    if not shutil.which(login_shell):
+        pytest.skip(f"{login_shell} not installed")
+    monkeypatch.setattr("caflood_common.ssh_argv", lambda s, cmd: [login_shell, "-c", cmd])
+    return {"runs_dir": (tmp_path / "runs").as_posix(), **settings}
+
+
+@pytest.mark.parametrize("login_shell", ["sh", "zsh"])
+def test_scan_remote_empty_or_missing_runs_dir(monkeypatch, tmp_path, login_shell):
+    # zsh: a */ matching nothing is a fatal "no matches found" (#8246).
+    settings = _vm(monkeypatch, tmp_path, login_shell)
+    assert scan_remote(settings) == []  # missing -> created
+    assert (tmp_path / "runs").is_dir()
+    assert scan_remote(settings) == []  # empty
+
+
+def test_scan_remote_cleans_up_reported_runs(monkeypatch, tmp_path):
+    settings = _vm(monkeypatch, tmp_path)
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    _run_folder(runs, "running", log=LOG[:CUTS["mid_simulation"]])
+    _run_folder(runs, "fresh", log=LOG, exit_code=0, reported=True)
+    (runs / "fresh" / "output_dir").mkdir()
+    (runs / "fresh" / "output_dir" / "depth.asc").write_text("x")
+    _run_folder(runs, "old", log=LOG, exit_code=0, reported=True)
+    eight_days_ago = time.time() - 8 * 86400
+    os.utime(runs / "old" / REPORTED_MARKER, (eight_days_ago, eight_days_ago))
+    _run_folder(runs, "not-a-run", is_run=False)
+    (runs / "not-a-run" / "keep.txt").write_text("x")
+
+    assert [e["folder"] for e in scan_remote(settings)] == ["running"]
+    assert sorted(p.name for p in (runs / "fresh").iterdir()) == ["output.log", REPORTED_MARKER]
+    assert not (runs / "old").exists()
+    assert (runs / "not-a-run" / "keep.txt").exists()
+    assert (runs / "running" / "config.csv").exists() and (runs / "running" / "output.log").exists()
+    # Stripped folders stay out of the listing until they expire.
+    assert [e["folder"] for e in scan_remote(settings)] == ["running"]
+
+
+@pytest.mark.parametrize("days", ["-1", "a week"])
+def test_scan_remote_refuses_bad_retention(tmp_path, days):
+    with pytest.raises(ValueError, match="CAFLOOD_LOG_RETENTION_DAYS"):
+        scan_remote({"runs_dir": str(tmp_path), "log_retention_days": days})
 
 
 # --- poll entries: action + broker update body ----------------------------------
