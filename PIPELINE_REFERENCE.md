@@ -50,7 +50,8 @@ flowchart TD
 | `check_file_storage.py`, `check_inputs.py` | a developer                  | manual checks: S3 round trip, entities readable                       |
 
 The CAFLOOD engine itself (setup file format, outputs, error messages) is
-documented in `DOC_CAFLOOD.md`.
+documented with the CAFLOOD distribution, see the
+[CADDIES framework page](https://www.exeter.ac.uk/research/centres/cws/resources/caddies/).
 
 ---
 
@@ -82,7 +83,7 @@ documented in `DOC_CAFLOOD.md`.
   "resolution": { "type": "Property", "value": 5, "unitCode": "MTR" },
   "digitalElevationModelLinkUrl": {
     "type": "Property",
-    "value": "https://saas-object-store.stellio.io/urbaquantum-caflood-inputs-dem/9ac32dde-cb98-4c11-8c18-c7ec626a58fc"
+    "value": "https://<object-store>/urbaquantum-caflood-inputs-dem/9ac32dde-cb98-4c11-8c18-c7ec626a58fc"
   },
   "coordinateReferenceSystem": { "type": "Property", "value": "EPSG:2154" }
 }
@@ -445,21 +446,23 @@ georeference the outputs:
 
 NiFi processors after `caflood_build.py`. `${serviceExecutionId}` and
 `${filename}` are flowfile attributes; on the VM the run folder is named
-after the ServiceExecution id.
+after the ServiceExecution id. Placeholders: `<key>` / `<known_hosts>` /
+`<port>` / `<user>@<caflood-vm>` = the `CAFLOOD_SSH_*` settings,
+`<runs_dir>` = `CAFLOOD_RUNS_DIR`, `<caflood>` = the CAFLOOD executable on the VM.
 
 1. **PutSFTP** sends the zip to
-   `/home/stellio/caflood-service-execution/${serviceExecutionId}`.
+   `<runs_dir>/${serviceExecutionId}`.
 2. **ExecuteStreamCommand (SSH): unzip.**
 
    ```text
-   -i;/opt/certs/id_ed25519_caflood_vm;-o;UserKnownHostsFile=/opt/certs/known_hosts;-p;41596;stellio@82.165.169.218;"cd /home/stellio/caflood-service-execution/${serviceExecutionId} && unzip ${filename} && mkdir output_dir"
+   -i;<key>;-o;UserKnownHostsFile=<known_hosts>;-p;<port>;<user>@<caflood-vm>;"cd <runs_dir>/${serviceExecutionId} && unzip ${filename} && mkdir output_dir"
    ```
 
 3. **ExecuteStreamCommand (SSH): launch** in the background, recording the
    PID and, at the end, the exit code:
 
    ```text
-   -i;/opt/certs/id_ed25519_caflood_vm;-o;UserKnownHostsFile=/opt/certs/known_hosts;-p;41596;stellio@82.165.169.218;"cd /home/stellio/caflood-service-execution/${serviceExecutionId} && ( nohup sh -c '/home/stellio/caddies-api-master/build/apps/cafloodpro/cafloodpro_64 -sim . config.csv output_dir > output.log 2>&1 && echo 0 > exit_code || echo $? > exit_code' < /dev/null > /dev/null 2>&1 & echo $! > pid )"
+   -i;<key>;-o;UserKnownHostsFile=<known_hosts>;-p;<port>;<user>@<caflood-vm>;"cd <runs_dir>/${serviceExecutionId} && ( nohup sh -c '<caflood> -sim . config.csv output_dir > output.log 2>&1 && echo 0 > exit_code || echo $? > exit_code' < /dev/null > /dev/null 2>&1 & echo $! > pid )"
    ```
 
    - **No `;` in the remote command:** it is `ExecuteStreamCommand`'s
@@ -590,7 +593,7 @@ Grid: …_<t>` line, divided by `Time End`. CAFLOOD writes the snapshots in
 
 `phase` is one of `preprocessing`, `simulation`, `postprocessing`, `done`.
 `code` is CAFLOOD's quality flag: 0 = flood contained, 2 = touches DEM
-NODATA, 4 = reaches the domain edge (`DOC_CAFLOOD.md` §10.2). It's
+NODATA, 4 = reaches the domain edge. It's
 read with a `grep` over the whole log, because post-processing output can
 push it out of the tail.
 
@@ -640,7 +643,7 @@ Old folders from before this mechanism can be marked by hand on the VM. They
 are then stripped at the next poll:
 
 ```bash
-cd /home/stellio/caflood-service-execution && for d in */; do touch "$d/reported"; done
+cd <runs_dir> && for d in */; do touch "$d/reported"; done
 ```
 
 ---
@@ -683,7 +686,7 @@ Output on success (abridged; URLs are illustrative):
     "executionStatus": "success",
     "progress": 1,
     "output": {
-      "manifestUrl": "https://saas-object-store.stellio.io/urbaquantum-caflood-outputs-rasters/0694...",
+      "manifestUrl": "https://<object-store>/urbaquantum-caflood-outputs-rasters/0694...",
       "manifest": {
         "serviceExecutionId": "urn:ngsi-ld:ServiceExecution:5be89d42-92c2-400b-b788-2fa59396d9bd",
         "studyAreaId": "urn:ngsi-ld:StudyArea:468709aa-1c52-4261-8452-4acdbea0eef1",
@@ -774,22 +777,17 @@ Exit codes: 0 = a `finalize` object was printed (success, or failure after
 ## 7. File storage
 
 S3 buckets behind **one NiFi HTTP endpoint**, routed on the HTTP method.
-Each deployment uses the endpoint that trusts its broker's realm
-(`FILE_STORAGE_URL`, authenticated with the `STELLIO_*` credentials):
+Each deployment uses the endpoint that trusts its broker's Keycloak realm
+(`FILE_STORAGE_URL`, authenticated with the `STELLIO_*` credentials).
 
-| Endpoint                                             | Trusted Keycloak realm | Deployment  |
-| ---------------------------------------------------- | ---------------------- | ----------- |
-| `https://dataflow.stellio.io/dev/storage`            | `stellio-dev`          | dev         |
-| `https://saas-import.stellio.io/urbaquantum/storage` | `urbaquantum`          | UrbaQuantum |
-
-The S3 processors of both flows need **Use Path Style Access = true**:
-`<bucket>.saas-object-store.stellio.io` doesn't resolve. After importing a
-new flow version, re-enter the S3 secret key (NiFi doesn't carry sensitive
-values over).
+The S3 processors of the flow may need **Use Path Style Access = true** when
+virtual-hosted bucket names (`<bucket>.<object-store>`) don't resolve. After
+importing a new flow version, re-enter the S3 secret key (NiFi doesn't carry
+sensitive values over).
 
 | Method                              | Request                    | Response                                                             |
 | ----------------------------------- | -------------------------- | -------------------------------------------------------------------- |
-| `POST ?bucket=<bucket>`             | raw file bytes as the body | `{"s3.url": "https://saas-object-store.stellio.io/<bucket>/<uuid>"}` |
+| `POST ?bucket=<bucket>`             | raw file bytes as the body | `{"s3.url": "https://<object-store>/<bucket>/<uuid>"}`              |
 | `GET ?bucket=<bucket>&id=<uuid>`    |                            | the file (500 if the object doesn't exist)                           |
 | `DELETE ?bucket=<bucket>&id=<uuid>` |                            | `{"status": "success"}`                                              |
 
@@ -830,12 +828,12 @@ arguments. The full list is in `caflood_common.py`'s docstring and
 | Group        | Variables                                                                                                                                                                                      |
 | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Stellio      | `STELLIO_BASE_URL`, `STELLIO_TOKEN_URL`, `STELLIO_CLIENT_ID`, `STELLIO_CLIENT_SECRET`, `STELLIO_CONTEXT_URL`, `STELLIO_TENANT`                                                                 |
-| File storage | `FILE_STORAGE_URL` (default `https://dataflow.stellio.io/dev/storage`, authenticated with the `STELLIO_*` client), `FILE_STORAGE_OUTPUT_BUCKET`                                                |
+| File storage | `FILE_STORAGE_URL` (authenticated with the `STELLIO_*` client), `FILE_STORAGE_OUTPUT_BUCKET`                                                |
 | Build        | `CAFLOOD_WORK_DIR`, `CAFLOOD_DATA_DIR`                                                                                                                                                         |
 | CAFLOOD VM   | `CAFLOOD_SSH_TARGET`, `CAFLOOD_SSH_PORT`, `CAFLOOD_SSH_KEY`, `CAFLOOD_SSH_KNOWN_HOSTS`, `CAFLOOD_RUNS_DIR`, `CAFLOOD_LOG_RETENTION_DAYS` (default 7), `CAFLOOD_SSH_MULTIPLEX` (default 1), `CAFLOOD_SSH_CONTROL_DIR` (default: temp dir) |
 
 Deployment on the NiFi machine: one clone of this repo per deployment (e.g.
-`/opt/scripts/urbaquantum/caflood-wrapper/`), each with its own `.env`.
+`<scripts_dir>/<deployment>/caflood-wrapper/`), each with its own `.env`.
 Updating is a `git pull` there; NiFi picks it up at the next call.
 
 ```bash
@@ -863,7 +861,7 @@ Set `CAFLOOD_SSH_MULTIPLEX=0` to disable it. The two SSH commands in the
 launch flow ([§4](#4-launch-on-the-caflood-vm)) can join the same shared
 connection by adding
 `-o;ControlMaster=auto;-o;ControlPath=/tmp/caflood-ssh-%C;-o;ControlPersist=60;`
-to their arguments, before `-p;41596`.
+to their arguments, before `-p;<port>`.
 
 ---
 
@@ -900,7 +898,7 @@ They don't cover the real SSH, Stellio and S3 calls. For those, use the
 - **Absolute timeframe** (ControlPoint / WeatherInformation temporal
   queries) isn't implemented ([§2.4](#24-serviceexecution-absolute-timeframe-not-implemented-yet)).
 - **Dev platform:** entities, the wrapper's NiFi and file storage all use
-  stellio-dev (one set of `STELLIO_*` credentials). Production will move to
+  the dev platform (one set of `STELLIO_*` credentials). Production will move to
   the target platform: broker, tenant, `FILE_STORAGE_URL` and its realm.
 - **No `tuningConfig` in current payloads:** every run uses `DEFAULT_TUNING`
   (roughness 0.03). Boundary Ele is always -10000 (open boundary).

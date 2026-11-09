@@ -114,7 +114,7 @@ def test_flat_notification_builds_the_same_job(tmp_path, dem_path, execution):
 
 
 def test_dem_url_is_fetched_through_file_storage(tmp_path, dem_path, execution):
-    url = "https://saas-object-store.stellio.io/urbaquantum-caflood-inputs-dem/9ac32dde"
+    url = "https://store.example.com/urbaquantum-caflood-inputs-dem/9ac32dde"
     storage = FakeStorage({("urbaquantum-caflood-inputs-dem", "9ac32dde"): dem_path.read_bytes()})
     result = build(tmp_path, execution, dem_source=url, storage=storage)
     assert storage.fetched == [("urbaquantum-caflood-inputs-dem", "9ac32dde")]
@@ -136,7 +136,7 @@ def test_absolute_timeframe_not_implemented(tmp_path, dem_path, execution):
 
 def test_cli_rejects_bad_payload(tmp_path, monkeypatch, capsys):
     for key, value in {"STELLIO_BASE_URL": "http://x", "STELLIO_TOKEN_URL": "http://x",
-                       "STELLIO_CLIENT_ID": "x", "STELLIO_CLIENT_SECRET": "x",
+                       "STELLIO_CLIENT_ID": "x", "STELLIO_CLIENT_SECRET": "x", "FILE_STORAGE_URL": "http://x",
                        "CAFLOOD_WORK_DIR": str(tmp_path), "CAFLOOD_ENV_FILE": str(tmp_path / "none.env")}.items():
         monkeypatch.setenv(key, value)
     payload = tmp_path / "payload.json"

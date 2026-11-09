@@ -71,7 +71,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from caflood_common import check_folder_name, run_ssh, ssh_settings
+from caflood_common import ConfigError, check_folder_name, run_ssh, ssh_settings
 from caflood_status import (
     CLAIM_FILE,
     CLAIM_TIMEOUT_S,
@@ -236,13 +236,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--local-dir", type=Path, help="Scan a local folder of runs instead of the VM (testing)")
     args = parser.parse_args(argv)
 
-    settings = ssh_settings()
     try:
+        settings = {} if args.local_dir else ssh_settings()
         if args.mark_reported:
             mark_reported(settings, args.mark_reported, args.local_dir)
             return 0
         entries = scan_local(args.local_dir) if args.local_dir else scan_remote(settings)
-    except ValueError as exc:
+    except (ConfigError, ValueError) as exc:
         print(f"caflood_poll: {exc}", file=sys.stderr)
         return 2
     except (RuntimeError, subprocess.TimeoutExpired) as exc:

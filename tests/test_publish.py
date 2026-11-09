@@ -146,7 +146,7 @@ def test_missing_crs_needs_override(run_dir, tmp_path):
 @pytest.fixture
 def env(tmp_path, monkeypatch):
     for key, value in {"STELLIO_BASE_URL": "http://x", "STELLIO_TOKEN_URL": "http://x",
-                       "STELLIO_CLIENT_ID": "x", "STELLIO_CLIENT_SECRET": "x",
+                       "STELLIO_CLIENT_ID": "x", "STELLIO_CLIENT_SECRET": "x", "FILE_STORAGE_URL": "http://x",
                        "CAFLOOD_ENV_FILE": str(tmp_path / "none.env")}.items():
         monkeypatch.setenv(key, value)
 

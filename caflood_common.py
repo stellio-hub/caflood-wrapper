@@ -21,19 +21,18 @@ scripts, else the current directory; real environment variables win.
     STELLIO_TENANT               optional NGSILD-Tenant header,
                                  e.g. urn:ngsi-ld:tenant:urbaquantum
   File storage (authenticated with the STELLIO_* credentials)
-    FILE_STORAGE_URL             storage endpoint, default
-                                 https://dataflow.stellio.io/dev/storage
+    FILE_STORAGE_URL             storage endpoint (required)
     FILE_STORAGE_OUTPUT_BUCKET   results bucket (caflood_publish.py), default
                                  urbaquantum-caflood-outputs-rasters
   Local folders (caflood_build.py)
     CAFLOOD_WORK_DIR             where job folders / zips are built (default cwd)
     CAFLOOD_DATA_DIR             base for a DEM given as a local path (default cwd)
   CAFLOOD VM (caflood_poll.py, caflood_publish.py)
-    CAFLOOD_SSH_TARGET           default stellio@82.165.169.218
-    CAFLOOD_SSH_PORT             default 41596
-    CAFLOOD_SSH_KEY              default /opt/certs/id_ed25519_caflood_vm
-    CAFLOOD_SSH_KNOWN_HOSTS      default /opt/certs/known_hosts
-    CAFLOOD_RUNS_DIR             default /home/stellio/caflood-service-execution
+    CAFLOOD_SSH_TARGET           user@host of the VM (required)
+    CAFLOOD_SSH_PORT             default 22
+    CAFLOOD_SSH_KEY              private key file (required)
+    CAFLOOD_SSH_KNOWN_HOSTS      known_hosts file (required)
+    CAFLOOD_RUNS_DIR             run folders on the VM (required)
     CAFLOOD_LOG_RETENTION_DAYS   default 7: how long a reported run's
                                  output.log is kept (caflood_poll.py)
     CAFLOOD_SSH_MULTIPLEX        default 1: reuse one SSH connection (OpenSSH
@@ -136,9 +135,7 @@ class Config:
             stellio_tenant=os.environ.get("STELLIO_TENANT") or None,
             work_dir=Path(os.environ.get("CAFLOOD_WORK_DIR", ".")).resolve(),
             data_dir=Path(os.environ.get("CAFLOOD_DATA_DIR", ".")).resolve(),
-            file_storage_url=(
-                os.environ.get("FILE_STORAGE_URL") or "https://dataflow.stellio.io/dev/storage"
-            ).rstrip("/"),
+            file_storage_url=require("FILE_STORAGE_URL").rstrip("/"),
         )
 
 
@@ -327,12 +324,19 @@ _SAFE_FOLDER = re.compile(r"[A-Za-z0-9_.:-]+")
 def ssh_settings() -> dict[str, str]:
     load_dotenv()
     env = os.environ.get
+
+    def require(name: str) -> str:
+        value = env(name)
+        if not value:
+            raise ConfigError(f"Missing required environment variable: {name}")
+        return value
+
     return {
-        "target": env("CAFLOOD_SSH_TARGET", "stellio@82.165.169.218"),
-        "port": env("CAFLOOD_SSH_PORT", "41596"),
-        "key": env("CAFLOOD_SSH_KEY", "/opt/certs/id_ed25519_caflood_vm"),
-        "known_hosts": env("CAFLOOD_SSH_KNOWN_HOSTS", "/opt/certs/known_hosts"),
-        "runs_dir": env("CAFLOOD_RUNS_DIR", "/home/stellio/caflood-service-execution"),
+        "target": require("CAFLOOD_SSH_TARGET"),
+        "port": env("CAFLOOD_SSH_PORT", "22"),
+        "key": require("CAFLOOD_SSH_KEY"),
+        "known_hosts": require("CAFLOOD_SSH_KNOWN_HOSTS"),
+        "runs_dir": require("CAFLOOD_RUNS_DIR"),
         "log_retention_days": env("CAFLOOD_LOG_RETENTION_DAYS", "7"),
         "multiplex": env("CAFLOOD_SSH_MULTIPLEX", "1"),
         "control_dir": env("CAFLOOD_SSH_CONTROL_DIR", tempfile.gettempdir()),

@@ -1,7 +1,7 @@
 """
 Writers for the CAFLOOD setup files (used by caflood_build.py): config.csv
 plus the rain / inflow / water-level event CSVs and the raster / time-plot
-output CSVs. Formats per DOC_CAFLOOD.md.
+output CSVs. Formats per the CAFLOOD setup-file conventions.
 """
 
 from __future__ import annotations
