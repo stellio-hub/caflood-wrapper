@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 EGM
 """caflood_inputs.py: payload, input resolution, timeframe, DEM, placement, profiles."""
 
 from __future__ import annotations

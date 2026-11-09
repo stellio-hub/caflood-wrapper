@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 EGM
 """caflood_build.py: ServiceExecution -> CAFLOOD job folder + zip."""
 
 from __future__ import annotations

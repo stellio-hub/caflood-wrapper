@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 EGM
 """
 CAFLOOD pipeline, step 1 - build the input job for one ServiceExecution.
 

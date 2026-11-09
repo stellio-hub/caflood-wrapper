@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 EGM
 """
 Writers for the CAFLOOD setup files (used by caflood_build.py): config.csv
 plus the rain / inflow / water-level event CSVs and the raster / time-plot

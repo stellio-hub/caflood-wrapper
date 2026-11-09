@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 EGM
 """caflood_common.py: FileStorageClient against a fake HTTP session."""
 
 from __future__ import annotations

@@ -42,3 +42,23 @@ folder; the exact command is in [PIPELINE_REFERENCE.md §4](PIPELINE_REFERENCE.m
 The relative timeframe (profiles) works end to end. The absolute timeframe
 (ControlPoint / WeatherInformation) is not implemented yet. See
 [PIPELINE_REFERENCE.md §10](PIPELINE_REFERENCE.md#10-known-gaps-and-temporary-choices).
+
+## CAFLOOD
+
+The scripts drive the CAFLOOD flood model (CADDIES framework, University of
+Exeter) on a separate VM. CAFLOOD itself is not included in this repository:
+see the [CADDIES framework page](https://www.exeter.ac.uk/research/centres/cws/resources/caddies/)
+for downloads, documentation and its own licence terms.
+
+## License
+
+Copyright (C) 2026 EGM
+
+This program is free software: you can redistribute it and/or modify it
+under the terms of the GNU General Public License as published by the Free
+Software Foundation, either version 3 of the License, or (at your option) any
+later version. See [LICENSE](LICENSE).
+
+This program is distributed in the hope that it will be useful, but WITHOUT
+ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+FOR A PARTICULAR PURPOSE.

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 EGM
 """
 Shared plumbing for the CAFLOOD service scripts (caflood_build.py,
 caflood_poll.py, caflood_publish.py and the check_* tools):

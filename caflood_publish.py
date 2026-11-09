@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 EGM
 """
 CAFLOOD pipeline, step 3 - publish the results of a finished run: pull its
 output rasters from the CAFLOOD VM, convert them to Cloud-Optimised

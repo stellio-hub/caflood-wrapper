@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 EGM
 """
 Dev check for the file-storage (S3) endpoint: uploads a file to a bucket,
 fetches it back using the returned "s3.url", checks the round trip is

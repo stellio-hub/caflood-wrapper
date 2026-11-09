@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 EGM
 """
 Shared fixtures for the offline test suite: no network, no CAFLOOD VM, no
 example files - everything (DEM, CAFLOOD log, run folders, entities) is

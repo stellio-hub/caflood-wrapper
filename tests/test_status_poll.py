@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 EGM
 """caflood_status.py (run state from a run folder) and caflood_poll.py (scan + mark)."""
 
 from __future__ import annotations
