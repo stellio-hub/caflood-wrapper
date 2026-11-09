@@ -10,7 +10,7 @@ import pytest
 
 from caflood_common import Config, FileStorageClient, FileStorageError
 
-URL = "https://dataflow.stellio.io/dev/storage"
+URL = "https://storage.example.com/storage"
 BUCKET = "urbaquantum-caflood-inputs-dem"
 
 
@@ -91,7 +91,7 @@ def test_upload_with_unexpected_answer():
 
 from caflood_common import run_ssh, ssh_argv  # noqa: E402
 
-SSH = {"key": "/k", "known_hosts": "/kh", "port": "41596", "target": "u@h", "control_dir": "/tmp/x"}
+SSH = {"key": "/k", "known_hosts": "/kh", "port": "2222", "target": "u@h", "control_dir": "/tmp/x"}
 
 
 def test_ssh_argv_shares_one_connection_by_default():
