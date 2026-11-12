@@ -13,7 +13,16 @@ import time
 
 import pytest
 
-from caflood_poll import REPORTED_MARKER, mark_reported, poll_entry, scan_local, scan_remote, split_runs
+from caflood_poll import (
+    REPORTED_MARKER,
+    abandon_runs,
+    handle_orphans,
+    mark_reported,
+    poll_entry,
+    scan_local,
+    scan_remote,
+    split_runs,
+)
 from caflood_status import (
     CLAIM_FILE,
     CLAIM_TIMEOUT_S,
@@ -279,3 +288,106 @@ def test_no_null_anywhere(kwargs):
 def test_mark_reported_refuses_unsafe_names(tmp_path, name):
     with pytest.raises(ValueError):
         mark_reported({}, name, tmp_path)
+
+
+# --- orphaned runs: ServiceExecution gone from the broker -------------------------
+
+def _entries():
+    running = entry(alive="yes", log_lines=LOG[:CUTS["mid_simulation"]])
+    return [
+        dict(running, folder="gone", serviceExecutionId="urn:ngsi-ld:ServiceExecution:gone"),
+        dict(running, folder="here", serviceExecutionId="urn:ngsi-ld:ServiceExecution:here"),
+        dict(running, folder="unknown", serviceExecutionId="urn:ngsi-ld:ServiceExecution:unknown"),
+        {"folder": "broken", "action": "ignore", "detail": {"error": "x"}},
+    ]
+
+
+def _exists(answers, calls=None):
+    def exists(execution_id):
+        if calls is not None:
+            calls.append(execution_id)
+        return answers[execution_id.rsplit(":", 1)[-1]]
+    return exists
+
+
+ANSWERS = {"gone": False, "here": True, "unknown": None}
+
+
+def test_orphan_is_abandoned_and_never_patched():
+    abandoned = []
+    entries = handle_orphans(_entries(), _exists(ANSWERS),
+                             lambda folders: abandoned.extend(folders) or set(folders))
+    by_folder = {e["folder"]: e for e in entries}
+    assert abandoned == ["gone"]
+    assert by_folder["gone"]["action"] == "orphaned" and "update" not in by_folder["gone"]
+    assert "404" in by_folder["gone"]["detail"]["orphaned"]
+    # Present, or unknown (network error, 5xx...): untouched.
+    assert by_folder["here"]["action"] == by_folder["unknown"]["action"] == "update"
+    assert by_folder["broken"]["action"] == "ignore"
+
+
+def test_ignored_entries_are_not_looked_up_and_ids_once():
+    calls = []
+    twice = _entries()[:1] * 2
+    twice = [dict(e) for e in twice]
+    handle_orphans(twice + _entries()[3:], _exists(ANSWERS, calls), lambda folders: set(folders))
+    assert calls == ["urn:ngsi-ld:ServiceExecution:gone"]
+
+
+def test_orphan_that_cannot_be_abandoned_is_ignored_not_patched():
+    def failing(folders):
+        raise RuntimeError("Connection refused")
+    entries = handle_orphans(_entries(), _exists(ANSWERS), failing)
+    gone = entries[0]
+    assert gone["action"] == "ignore" and "update" not in gone
+    assert "Connection refused" in gone["detail"]["error"]
+
+
+def test_no_orphan_no_ssh():
+    def must_not_run(folders):
+        raise AssertionError("abandon called")
+    entries = handle_orphans(_entries()[1:], _exists(ANSWERS), must_not_run)
+    assert [e["action"] for e in entries] == ["update", "update", "ignore"]
+
+
+def test_abandon_marks_folders_and_skips_missing_ones(monkeypatch, tmp_path):
+    settings = _vm(monkeypatch, tmp_path)
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    _run_folder(runs, "run-a", log=LOG[:CUTS["mid_simulation"]])
+    # A pid that is not a CAFLOOD command line (pid reuse) is never killed.
+    other = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    try:
+        (runs / "run-a" / "pid").write_text(f"{other.pid}\n")
+        marked = abandon_runs(settings, ["run-a", "missing"])
+        assert marked == {"run-a"}
+        assert (runs / "run-a" / REPORTED_MARKER).exists()
+        assert other.poll() is None
+    finally:
+        other.kill()
+        other.wait()
+    # Marked runs are no longer listed (and get cleaned up).
+    assert scan_remote(settings) == []
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="needs Linux ps / pkill")
+def test_abandon_stops_a_running_caflood(monkeypatch, tmp_path):
+    settings = _vm(monkeypatch, tmp_path)
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    _run_folder(runs, "r", log=LOG[:CUTS["mid_simulation"]])
+    # Same shape as the NiFi launch: sh -c '<cafloodpro command> ...'
+    proc = subprocess.Popen(["sh", "-c", "sleep 30; : cafloodpro_64 -sim . config.csv output_dir"])
+    (runs / "r" / "pid").write_text(f"{proc.pid}\n")
+    try:
+        assert abandon_runs(settings, ["r"]) == {"r"}
+        assert proc.wait(timeout=10) is not None
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+
+
+@pytest.mark.parametrize("name", ["../etc", "a b", "$(rm -rf x)"])
+def test_abandon_refuses_unsafe_names(name):
+    with pytest.raises(ValueError):
+        abandon_runs({"runs_dir": "/tmp"}, [name])

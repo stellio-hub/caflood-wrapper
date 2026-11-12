@@ -221,6 +221,19 @@ class StellioClient:
         resp.raise_for_status()
         return resp.json()
 
+    def service_execution_exists(self, execution_id: str) -> bool | None:
+        """True if the broker has this ServiceExecution, False on a 404, None
+        when it can't tell (network error, token failure, any other status):
+        only a definite 404 may be acted upon."""
+        url = f"{self._config.stellio_base_url}/ngsi-ld/v1/services/{execution_id}"
+        try:
+            resp = self._session.get(url, headers=self._headers(), timeout=15)
+        except requests.RequestException:
+            return None
+        if resp.status_code == 404:
+            return False
+        return True if resp.ok else None
+
 
 # --------------------------------------------------------------------------
 # File storage (S3 behind NiFi endpoints - see check_file_storage.py)

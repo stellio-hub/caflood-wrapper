@@ -24,7 +24,19 @@ per run, telling NiFi what to do next:
                                         or failure once publishing has kept
                                         failing for too long)
   wait      completed, being published  nothing (a publisher holds the claim)
+  orphaned  its ServiceExecution is     nothing: the poller has already stopped
+            gone from the broker (404)  the CAFLOOD process and marked the folder
   ignore    unreadable folder           nothing ("detail" says why)
+
+Orphaned runs: every listed run's ServiceExecution is looked up on the
+broker (GET /services/<id>). On a 404 (execution deleted, or a launch that
+failed after the folder was unzipped) the run would otherwise be PATCHed -
+and fail with 404 - at every poll forever. Instead the poller stops its
+CAFLOOD process if still running, marks the folder as reported (normal
+cleanup follows) and returns "orphaned". Any other answer (network error,
+5xx, token failure) leaves the run untouched, so a broker outage never
+stops runs. The check needs the STELLIO_* settings; without them it is
+skipped (with a warning on stderr).
 
 Publishing bookkeeping (see caflood_publish.py): a fresh "publishing" claim
 (< CLAIM_TIMEOUT_S) means another publish is in progress -> "wait"; an older
@@ -56,10 +68,13 @@ are left alone. A missing CAFLOOD_RUNS_DIR is created (empty -> "[]").
 Usage (NiFi: ExecuteProcess on a timer):
   python caflood_poll.py                     -> JSON array on stdout
   python caflood_poll.py --mark-reported F   -> marks run folder F as reported
+  python caflood_poll.py --abandon F [F ...]  -> stops runs F if running, marks
+                                               them reported (JSON list of the
+                                               folders marked)
   python caflood_poll.py --local-dir DIR     -> same scan on a local folder (testing)
 
 Environment: CAFLOOD_SSH_* / CAFLOOD_RUNS_DIR / CAFLOOD_LOG_RETENTION_DAYS,
-see caflood_common.py.
+plus STELLIO_* for the orphan check, see caflood_common.py.
 Exit codes: 0 = done (the array may be empty), 1 = SSH failed, 2 = bad usage.
 """
 
@@ -71,9 +86,9 @@ import shlex
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
-from caflood_common import ConfigError, check_folder_name, run_ssh, ssh_settings
+from caflood_common import Config, ConfigError, StellioClient, check_folder_name, run_ssh, ssh_settings
 from caflood_status import (
     CLAIM_FILE,
     CLAIM_TIMEOUT_S,
@@ -131,6 +146,95 @@ for d in */; do
   echo
 done
 """
+
+
+# Remote side of abandoning runs (orphaned, or deleted by a user): stop the
+# CAFLOOD process if it is still running, then mark the folder as reported so
+# the next scans clean it up. `pid` holds the `sh -c '... cafloodpro_64 ...'`
+# wrapper started by NiFi: its child (the engine) is stopped first, and only
+# if that pid still runs a cafloodpro command line (pids get reused).
+_ABANDON_SCRIPT = """\
+cd {runs_dir} || exit 3
+for d in {folders}; do
+  [ -d "$d" ] || continue
+  if [ -f "$d/pid" ] && [ ! -f "$d/exit_code" ]; then
+    p=$(cat "$d/pid")
+    if ps -o args= -p "$p" 2>/dev/null | grep -q cafloodpro; then
+      pkill -TERM -P "$p" 2>/dev/null
+      kill -TERM "$p" 2>/dev/null
+    fi
+  fi
+  touch "$d/{marker}" && echo "@@abandoned $d"
+done
+"""
+
+
+def abandon_runs(settings: dict[str, str], folders: list[str]) -> set[str]:
+    """Stop (if running) and mark as reported these run folders, in one SSH
+    call. Returns the folders actually marked (missing ones are skipped)."""
+    if not folders:
+        return set()
+    for folder in folders:
+        check_folder_name(folder)
+    script = _ABANDON_SCRIPT.format(
+        runs_dir=shlex.quote(settings["runs_dir"]),
+        folders=" ".join(shlex.quote(f) for f in folders),
+        marker=REPORTED_MARKER,
+    )
+    output = run_ssh(settings, "sh -s", input_text=script)
+    return {line[len("@@abandoned "):].strip() for line in output.splitlines()
+            if line.startswith("@@abandoned ")}
+
+
+def handle_orphans(
+    entries: list[dict[str, Any]],
+    exists: Callable[[str], bool | None],
+    abandon: Callable[[list[str]], set[str]],
+) -> list[dict[str, Any]]:
+    """Turn the entries whose ServiceExecution is gone (exists() is False -
+    None means unknown and changes nothing) into "orphaned" ones, after
+    abandon() has stopped and marked their folders. If abandoning fails they
+    become "ignore" (retried at the next poll), never a PATCH."""
+    known: dict[str, bool | None] = {}
+    orphans = []
+    for entry in entries:
+        execution_id = entry.get("serviceExecutionId")
+        if entry.get("action") == "ignore" or not execution_id:
+            continue
+        if execution_id not in known:
+            known[execution_id] = exists(execution_id)
+        if known[execution_id] is False:
+            orphans.append(entry)
+    if not orphans:
+        return entries
+
+    error = None
+    try:
+        done = abandon([e["folder"] for e in orphans])
+    except (RuntimeError, subprocess.TimeoutExpired, ValueError) as exc:
+        done, error = set(), str(exc)
+    for entry in orphans:
+        entry.pop("update", None)
+        detail = entry.setdefault("detail", {})
+        if entry["folder"] in done:
+            entry["action"] = "orphaned"
+            detail["orphaned"] = ("ServiceExecution not found in the broker (404): "
+                                  "CAFLOOD stopped if running, folder marked as reported")
+        else:
+            entry["action"] = "ignore"
+            detail["error"] = (f"ServiceExecution not found in the broker (404), but the run "
+                               f"could not be abandoned: {error or 'folder not found'}")
+    return entries
+
+
+def check_orphans(entries: list[dict[str, Any]], settings: dict[str, str]) -> list[dict[str, Any]]:
+    try:
+        stellio = StellioClient(Config.from_env())
+    except ConfigError as exc:
+        print(f"caflood_poll: orphan check skipped ({exc})", file=sys.stderr)
+        return entries
+    return handle_orphans(entries, stellio.service_execution_exists,
+                          lambda folders: abandon_runs(settings, folders))
 
 
 def split_runs(scan_output: str) -> dict[str, str]:
@@ -235,6 +339,9 @@ def mark_reported(settings: dict[str, str], folder: str, local_dir: Path | None)
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--mark-reported", metavar="FOLDER", help="Mark this run folder as reported and exit")
+    parser.add_argument("--abandon", nargs="+", metavar="FOLDER",
+                        help="Stop these runs if still running, mark them as reported and exit "
+                             "(e.g. before deleting their ServiceExecutions)")
     parser.add_argument("--local-dir", type=Path, help="Scan a local folder of runs instead of the VM (testing)")
     args = parser.parse_args(argv)
 
@@ -243,7 +350,13 @@ def main(argv: list[str] | None = None) -> int:
         if args.mark_reported:
             mark_reported(settings, args.mark_reported, args.local_dir)
             return 0
-        entries = scan_local(args.local_dir) if args.local_dir else scan_remote(settings)
+        if args.abandon:
+            print(json.dumps(sorted(abandon_runs(settings, args.abandon))))
+            return 0
+        if args.local_dir:
+            entries = scan_local(args.local_dir)
+        else:
+            entries = check_orphans(scan_remote(settings), settings)
     except (ConfigError, ValueError) as exc:
         print(f"caflood_poll: {exc}", file=sys.stderr)
         return 2
