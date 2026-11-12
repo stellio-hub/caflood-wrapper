@@ -522,6 +522,7 @@ for logs and provenance only, and isn't sent to the broker.
 | `finalize` | failed, or completed with a saved publish result | PATCH `update` → `caflood_poll.py --mark-reported ${folder}`                                           |
 | `publish`  | completed, not published yet                     | `caflood_publish.py ${folder}`: its output is a `finalize` object → PATCH `update` → `--mark-reported` |
 | `wait`     | completed, being published (fresh claim)         | nothing                                                                                                |
+| `orphaned` | its ServiceExecution is gone from the broker     | nothing: the poller already stopped the run and marked it (see below)                                  |
 | `ignore`   | unreadable folder                                | nothing (`detail.error` says why)                                                                      |
 
 NiFi flow:
@@ -535,7 +536,7 @@ NiFi flow:
       finalize → [6] → (on success) [7]
       publish  → [5] → exit 0: back to [3] (its output is a finalize object)
                        exit 1: drop (retried at a later poll)
-      wait, ignore → drop
+      wait, orphaned, ignore → drop
 [5] ExecuteStreamCommand  python caflood_publish.py ${folder}
 [6] EvaluateJsonPath      $.update (Destination: flowfile-content) → PATCH the ServiceExecution
                           (Content-Type: application/json)
@@ -570,6 +571,26 @@ A run that's still unzipped and not launched yet (`pending`) is reported as
 **Only mark a run once its update has succeeded.** A run without a marker
 is listed again on the next poll, which acts as an automatic retry. Once
 marked, it's never listed again.
+
+**Orphaned runs.** The poller looks up each listed run's ServiceExecution
+(`GET /services/<id>`). On a 404, the run would otherwise be PATCHed, and
+fail with 404, at every poll forever. This happens when the execution was
+deleted, or when NiFi unzipped a run but then answered Stellio with an
+error. The poller then, in one extra SSH call:
+
+1. stops the CAFLOOD process if it's still running (only if `pid` still
+   runs a `cafloodpro` command line);
+2. marks the folder `reported`, so the normal cleanup removes it.
+
+It returns `orphaned`, which NiFi drops. Any other answer (network error,
+5xx, token failure) changes nothing, so a broker outage never stops a run.
+If the SSH call fails, the entry becomes `ignore` and the next poll
+retries. The lookup uses the `STELLIO_*` settings; without them it's
+skipped, with a warning on stderr.
+
+`caflood_poll.py --abandon <folder> [<folder> …]` does the same on demand,
+for example before deleting a running ServiceExecution. It prints the
+folders it marked.
 
 ### 5.2 How the state is decided (`caflood_status.py`)
 
@@ -872,7 +893,7 @@ pip install -r requirements-dev.txt
 python -m pytest tests
 ```
 
-98 offline tests, a few seconds. No network, VM or example files: the
+117 offline tests, a few seconds. No network, VM or example files: the
 fixtures (`tests/conftest.py`) generate a 20 × 10-cell Lambert-93 DEM near
 Menton, a CAFLOOD log in the real format, and run folders and output
 rasters. Stellio and S3 are replaced by fakes. They cover:
@@ -883,6 +904,9 @@ rasters. Stellio and S3 are replaced by fakes. They cover:
 - every status scenario and the progress values;
 - poll actions and broker update bodies (no nulls);
 - scan and marking, including unsafe folder names;
+- orphaned runs: 404 → stopped and marked, unknown answers change nothing,
+  a failed clean-up becomes `ignore`; the broker lookup itself
+  (stopping a real process needs Linux `ps` / `pkill`: skipped elsewhere);
 - COG content, the manifest, quality code warnings;
 - publishing bookkeeping: claim / wait, saved result, giving up after 1 h;
 - the file-storage client (method routing, bare key, error messages);

@@ -12,6 +12,7 @@ and publish the results to S3. Full details: [PIPELINE_REFERENCE.md](PIPELINE_RE
 | 2. Track | `caflood_poll.py` | timer, every minute | per run: `action` + broker `update` body |
 | 3. Publish | `caflood_publish.py <folder>` | action `publish` | COGs + manifest in S3; `update` body (success, or failure after 1 h of failures) |
 | - | `caflood_poll.py --mark-reported <folder>` | after the final update | run no longer polled |
+| - | `caflood_poll.py --abandon <folder>...` | by hand, e.g. before deleting a running ServiceExecution | run stopped if running, no longer polled |
 
 Libraries: `caflood_common.py` (config, clients, SSH), `caflood_inputs.py`,
 `caflood_setup_files.py`, `caflood_status.py`. Dev checks:

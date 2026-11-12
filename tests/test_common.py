@@ -10,7 +10,9 @@ from pathlib import Path
 
 import pytest
 
-from caflood_common import Config, FileStorageClient, FileStorageError
+import requests
+
+from caflood_common import Config, FileStorageClient, FileStorageError, StellioClient
 
 URL = "https://storage.example.com/storage"
 BUCKET = "urbaquantum-caflood-inputs-dem"
@@ -133,3 +135,37 @@ def test_run_ssh_does_not_wait_for_a_background_process_holding_stderr(monkeypat
     start = _time.monotonic()
     assert run_ssh(SSH, "true").strip() == "done"
     assert _time.monotonic() - start < 10
+
+
+# --- broker lookup used by the orphan check ------------------------------------
+
+class _GetSession:
+    def __init__(self, answer):
+        self.answer = answer
+        self.urls = []
+
+    def get(self, url, **kwargs):
+        self.urls.append(url)
+        if isinstance(self.answer, Exception):
+            raise self.answer
+        return self.answer
+
+
+@pytest.mark.parametrize("answer, expected", [
+    (FakeResponse(200, b"{}"), True),
+    (FakeResponse(404, b"{}"), False),
+    (FakeResponse(500, b"oops"), None),
+    (FakeResponse(401, b""), None),
+    (requests.ConnectionError("down"), None),
+])
+def test_service_execution_exists(answer, expected):
+    stellio = StellioClient(Config(
+        stellio_base_url="https://stellio", stellio_token_url="https://sso/token",
+        stellio_client_id="nifi", stellio_client_secret="secret",
+        stellio_context_url=None, stellio_tenant=None,
+        work_dir=Path("."), data_dir=Path("."), file_storage_url=URL,
+    ))
+    stellio._session = _GetSession(answer)
+    stellio._access_token = lambda: "TOKEN"
+    assert stellio.service_execution_exists("urn:ngsi-ld:ServiceExecution:x") is expected
+    assert stellio._session.urls == ["https://stellio/ngsi-ld/v1/services/urn:ngsi-ld:ServiceExecution:x"]
